@@ -1,0 +1,68 @@
+- name: VM initialization
+  hosts: all
+  become: yes
+  become_user: root
+  tasks:
+    - name: Add the 'stack' user for devstack
+      user:
+        name: stack
+        comment: Dev stack user
+        shell: /bin/bash
+        # Definition of a custom user HOME directory, according to the DevStack recommendation
+        home: /opt/stack
+
+    - name: Make 'stack' a privileged user
+      copy:
+        content: 'stack ALL=(ALL) NOPASSWD: ALL'
+        dest: /etc/sudoers.d/stack
+        mode: 0440
+
+    # Without the `acl` package you may (and probably will) experience permission related issues
+    - name: Install acl to fix unprivileged user error
+      package:
+        name: acl
+        state: present
+
+    # DevStack scripts uses `python` directly to system has to ensure `python` command availability and map it to the Python 3
+    - name: Install python-is-python3 to ensures that python means python3
+      package:
+        name: python-is-python3
+        state: present
+
+- name: DevStack setup as 'stack' user
+  hosts: all
+  become: yes
+  become_user: stack
+  tasks:
+    - name: Clone devstack
+      git:
+        repo: https://opendev.org/openstack/devstack
+        dest: /opt/stack/devstack
+        version: stable/victoria
+
+    - name: Copy file with configuration
+      copy:
+        src: ./devstack/local.conf
+        dest: /opt/stack/devstack/local.conf
+
+    - name: Test if DevStack is installed by checking /opt/stack/tempest existence
+      shell:
+        # According to the https://docs.openstack.org/devstack/victoria#profit
+        # /opt/stack/tempest dir should exist after devstack installation is completed
+        # this is not an ideal way of testing but at least it is something
+        cmd: 'test -d "/opt/stack/tempest" && echo "yes" || echo "no"'
+      # Save command result to Ansible variable
+      register: is_devstack_installed
+      ignore_errors: true
+
+    - debug: var=is_devstack_installed
+
+    - name: Install devstack, this step may take up to 30 minutes or even more
+      # Use Ansible variable to check if installation should be executed
+      when: is_devstack_installed.stdout == "no"
+      shell:
+        chdir: /opt/stack/devstack
+        cmd: ./stack.sh
+      register: devstack_output
+
+    - debug: var=devstack_output.stdout_lines
